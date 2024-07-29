@@ -1,0 +1,14 @@
+Training:
+
+To try the training enshure that you have all the requirements, from requirement.txt file.
+Then you can run a simple example with:
+
+python3 train.py -dp example/elovl_example_train.csv -dpt example/elovl_example_test.csv -dpv example/elovl_example_validation.csv -m ELOVL2_6
+
+
+
+Prediction:
+
+You can run a simple example for the prediction with:
+
+python3 predict.py -m ELOVL2_6 -d example/elovl_example_test.csv
