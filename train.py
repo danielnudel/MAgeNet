@@ -1,5 +1,4 @@
 import argparse
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import sys
@@ -81,7 +80,7 @@ class EarlyStopping():
             self.predictor = copy.deepcopy(predictor)
         if self.counter > self.conseq_loss_steps:
             self.checkpoint_loss = loss
-            torch.save(self.predictor.state_dict(), "./models/new_predictor_" + self.model_name)
+            torch.save(self.predictor.state_dict(), "./models/predictor_" + self.model_name)
             return True
         if loss < self.min_loss:
             self.min_loss = loss
@@ -212,7 +211,7 @@ def train(args, df_train, df_val, df_test):
     predictor = Predictor(args.input_size, args.layer_size, args.num_layers, dropout=args.dropout)
     predictor.to(device)
     optimizer = optim.Adam(predictor.parameters(), lr=args.learning_rate, betas=(0.9, 0.99))
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, verbose=True, factor=0.7, patience=1)
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, factor=0.7, patience=1)
     es = EarlyStopping(5, args.marker + '_' + str(args.input_size))
     print("Expected batches: ", len(training_data) / args.batch_size)
     for i in range(int(args.epochs)):
