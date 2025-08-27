@@ -62,7 +62,7 @@ def predict(args, df):
     device = torch.device('cpu')
     input_size, layer_size, num_layers = MODEL_PARAMETERS[marker]
     predictor = Predictor(input_size, layer_size, num_layers)
-    predictor.load_state_dict(torch.load("models/predictor_" + marker + '_' + str(input_size)))
+    predictor.load_state_dict(torch.load("models/new_predictor_" + marker + '_' + str(input_size)))
     predictor.to(device)
     test_data = CustomDataset(df)
     test_dataloader = DataLoader(test_data, batch_size=len(test_data), shuffle=False, num_workers=4)

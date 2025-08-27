@@ -80,7 +80,7 @@ class EarlyStopping():
             self.predictor = copy.deepcopy(predictor)
         if self.counter > self.conseq_loss_steps:
             self.checkpoint_loss = loss
-            torch.save(self.predictor.state_dict(), "./models/predictor_" + self.model_name)
+            torch.save(self.predictor.state_dict(), "./models/new_predictor_" + self.model_name)
             return True
         if loss < self.min_loss:
             self.min_loss = loss
