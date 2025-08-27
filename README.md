@@ -35,7 +35,7 @@ python3 train.py \
 
 -dpv: Path to validation dataset
 
--m : Model name identifier
+-m : Model name identifier ('ELOVL2_6', 'C1orf132', 'FHL2' or 'CCDC102B')
 
 ## Prediction
 You can run predictions on a dataset using a trained model:
@@ -53,6 +53,7 @@ python3 predict.py \
 
 ## Repository Structure
 
+```
 MAgeNet/
 │── train.py                 # Training script
 │── predict.py               # Prediction script
@@ -62,3 +63,4 @@ MAgeNet/
 │   ├── elovl_example_test.csv
 │   └── elovl_example_validation.csv
 │── README.md
+```
