@@ -1,9 +1,13 @@
 import argparse
+import json
+import os
 import numpy as np
 import pandas as pd
 import sys
 from random import randrange, sample
 import copy
+
+from augment_utils import augment
 
 import torch
 import torch.optim as optim
@@ -13,7 +17,6 @@ import torch.nn.functional as F
 
 np.seterr(divide='ignore')
 criterion = torch.nn.L1Loss()
-device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 
 test_loss = []
 train_loss = []
@@ -99,7 +102,7 @@ class CustomDataset(Dataset):
         self.all_data = df.copy()
         self.all_data.dropna(inplace=True)
         self.tags = list(self.all_data['tag'].values)
-        self.labels = list(self.all_data['age'].values)
+        self.labels = torch.tensor(self.all_data['age'].values, dtype=torch.float32)
         self.all_data.drop(columns=['tag', 'age'], inplace=True)
         self.data = torch.tensor(self.all_data.values, dtype=torch.float32)
 
@@ -110,45 +113,7 @@ class CustomDataset(Dataset):
         return self.data[idx], self.labels[idx], self.tags[idx]
 
 
-def augment(data_path):
-    READS_PER_AUGMENTED_SAMPLE = 8192
-    NUM_SUB_SAMPLES = 128
-    data = pd.read_csv(data_path)
-    ages = []
-    original_total_reads = []
-    tags = []
-    boot_rows = np.zeros((len(data.index) * NUM_SUB_SAMPLES, len(data.columns) - 3))
-    row_counter = 0
-    for i, row in data.iterrows():
-        age = row['age']
-        total_reads = row['total_reads_origin']
-        tag = row['tag']
-        probabilities = row.values[:-3] / total_reads
-        for i in range(NUM_SUB_SAMPLES):
-            out = np.random.multinomial(READS_PER_AUGMENTED_SAMPLE, probabilities)
-            boot_rows[row_counter, :] = out
-            ages.append(age)
-            original_total_reads.append(total_reads)
-            tags.append(tag)
-            row_counter += 1
-    df = pd.DataFrame(boot_rows, columns=data.columns[:-3])
-    fixed_columns = df.columns
-    df['age'] = ages
-    df['total_reads_origin'] = original_total_reads
-    df['tag'] = tags
-
-    num_sites = len(data.columns[0])
-    for i in range(num_sites + 1):
-        columns_of_interest = [c for c in fixed_columns if c.count('C') == i]
-        df["C_count_" + str(i)] = df[columns_of_interest].sum(axis=1)
-    for site in range(num_sites):
-        columns_of_interest = [c for c in fixed_columns if c[site] == 'C']
-        df["site_" + str(site + 1)] = df[columns_of_interest].sum(axis=1)
-    columns_order = [c for c in df.columns if "site_" in c] + \
-                    [c for c in df.columns if "C_count_" in c] + \
-                    sorted(list(data.columns[:-3]))
-    df = df[columns_order + ['tag', 'age']]
-    return df
+# augment() is imported from augment_utils
 
 
 def test(args, df):
@@ -161,12 +126,14 @@ def test(args, df):
     with torch.no_grad():
         predictor.eval()
         batch_test, labels_test, tags = next(iter(test_dataloader))
+        batch_test = batch_test.to(device)
+        labels_test = labels_test.to(device)
         out_test = predictor(batch_test)
         loss_test = criterion(out_test, labels_test[:, None])
         predictions_by_tag = dict()
         tag_to_age_dict = {}
         for l in range(len(out_test)):
-            tag = tags[l].item()
+            tag = tags[l]
             tag_to_age_dict[tag] = labels_test[l].item()
             original_tag = tag
             if original_tag in predictions_by_tag:
@@ -218,8 +185,8 @@ def train(args, df_train, df_val, df_test):
         predictor.train()
         batch_counter = 0
         for _, data in enumerate(train_dataloader):
-            batch = data[0]
-            labels = data[1]
+            batch = data[0].to(device)
+            labels = data[1].to(device)
             batch_counter += 1
             optimizer.zero_grad()
             out = predictor(batch)
@@ -232,6 +199,8 @@ def train(args, df_train, df_val, df_test):
             print("train loss: ", loss.item())
             predictor.eval()
             batch_validation, labels_validation, tags = next(iter(val_dataloader))
+            batch_validation = batch_validation.to(device)
+            labels_validation = labels_validation.to(device)
             out_validation = predictor(batch_validation)
             loss_test = criterion(out_validation, labels_validation[:, None])
             print("validation loss: ", loss_test.item())
@@ -257,7 +226,7 @@ def train(args, df_train, df_val, df_test):
 
             # when "early stop" is triggered the training stops and the model is saved in the "models" directory
             if es(loss_test.item(), loss.item(), predictor=predictor):
-                print("Training stopped")
+                print("Training finished early, running test")
                 test(args, df_test)
                 return True
     return False
@@ -294,19 +263,32 @@ if __name__ == "__main__":
         args.num_layers = 6
     if not args.epochs:
         args.epochs = 1000
-    device = torch.device('cpu')
-
-    print("Running DL for marker ", args.marker)
-    try:
-        num_of_sites = len(locus_parameters[args.marker])
-    except:
-        print("Wrong marker name", file=sys.stderr)
-        exit(-1)
-    if num_of_sites > 4:
-        args.layer_size = 512
+    # Check for CUDA (NVIDIA), then MPS (Apple Silicon), then fallback to CPU
+    if torch.cuda.is_available():
+        device = torch.device("cuda")
+    elif torch.backends.mps.is_available():
+        device = torch.device("mps")
     else:
-        args.layer_size = 256
-    args.input_size = 2**num_of_sites + 2*num_of_sites + 1    # total size of the input
+        device = torch.device("cpu")
+
+    print(f"Using device: {device}")
+    print("Running DL for marker ", args.marker)
+
+    manifest_path = os.path.splitext(args.data_path_train)[0] + "_manifest.json"
+    if os.path.exists(manifest_path):
+        with open(manifest_path) as f:
+            manifest = json.load(f)
+        # Each marker contributes 2^n + 2n + 1 features after augmentation
+        args.input_size = sum(2**m["num_sites"] + 2*m["num_sites"] + 1 for m in manifest)
+        args.layer_size = 1024
+    else:
+        try:
+            num_of_sites = len(locus_parameters[args.marker])
+        except KeyError:
+            print("Wrong marker name", file=sys.stderr)
+            exit(-1)
+        args.layer_size = 512 if num_of_sites > 4 else 256
+        args.input_size = 2**num_of_sites + 2*num_of_sites + 1
     df_train = augment(args.data_path_train)
     df_val = augment(args.data_path_val)
     df_test = augment(args.data_path_test)

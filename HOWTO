@@ -1,14 +1,141 @@
-Training:
+Step-by-step guide for preparing data, training a model, and running predictions.
+Both single-marker and multi-marker (concatenated) workflows are covered.
 
-To try the training enshure that you have all the requirements, from requirement.txt file.
-Then you can run a simple example with:
+────────────────────────────────────────
+STEP 1 — Convert published data to CSV
+────────────────────────────────────────
 
-python3 train.py -dp example/elovl_example_train.csv -dpt example/elovl_example_test.csv -dpv example/elovl_example_validation.csv -m ELOVL2_6
+Published methylation files are in data/published/, one per locus.
+Each file is tab-separated with three columns:
+  age<float>_<sample_tag>   <sequence>   <count>
+
+Run txt_to_csv.py to convert a file to the CSV format expected by train.py/predict.py.
+Pass -p to select the CpG site positions you want (1-indexed, comma-separated).
+Sequences with non-C/T characters at the selected positions are automatically discarded.
+
+  python3 scripts/txt_to_csv.py data/published/chr6:11044843-11044997.txt -p 1,2,3,4,5,6,7,8,9
+
+Output is saved to:
+  data/processed/chr6/11044843-11044997.csv
+
+Repeat for every locus/marker you intend to use.
 
 
+────────────────────────────────────────
+STEP 2 — Register samples and split into train / validation / test
+────────────────────────────────────────
 
-Prediction:
+Splits are stratified by age: 70/30 train+val vs test, then 70/30 train vs validation.
+Split assignments are stored permanently in data/train_test_split.csv.
 
-You can run a simple example for the prediction with:
+First time (register new samples and write split files):
 
-python3 predict.py -m ELOVL2_6 -d example/elovl_example_test.csv
+  python3 scripts/split_csv.py data/processed/chr6/11044843-11044997.csv --register
+
+Subsequent runs (only already-registered tags are written to output; registry unchanged):
+
+  python3 scripts/split_csv.py data/processed/chr6/11044843-11044997.csv
+
+This creates three files alongside the input:
+  data/processed/chr6/11044843-11044997_train.csv
+  data/processed/chr6/11044843-11044997_validation.csv
+  data/processed/chr6/11044843-11044997_test.csv
+
+Run split_csv.py for every marker you converted in Step 1.
+Because assignments are shared in train_test_split.csv, the same sample tag
+will always land in the same split across all markers.
+
+
+────────────────────────────────────────
+STEP 3A — Train a single-marker model
+────────────────────────────────────────
+
+  python3 train.py \
+    -dp  data/processed/chr6/11044843-11044997_train.csv \
+    -dpt data/processed/chr6/11044843-11044997_test.csv \
+    -dpv data/processed/chr6/11044843-11044997_validation.csv \
+    -m   ELOVL2_6
+
+Supported single markers: ELOVL2_6, C1orf132, FHL2, CCDC102B
+
+Optional flags:
+  -lr   learning rate  (default 0.00003)
+  -bs   batch size     (default 128)
+  -e    max epochs     (default 1000)
+  -d    dropout        (default 0.01)
+
+The trained model is saved to models/new_predictor_<marker>_<input_size>.
+Training stops automatically when validation loss stops improving (early stopping).
+
+
+────────────────────────────────────────
+STEP 3B — Train a multi-marker (concatenated) model
+────────────────────────────────────────
+
+First, concatenate the per-marker split files. Run concat_markers.py once per split,
+passing MARKER=path pairs in the format MARKER_NAME=path/to/split.csv.
+
+  python3 scripts/concat_markers.py \
+    ELOVL2_6=data/processed/chr6/11044843-11044997_train.csv \
+    C1orf132=data/processed/chr1/207996978-207997090_train.csv \
+    -o data/processed/combined/ELOVL2_6_C1orf132_train.csv
+
+  python3 scripts/concat_markers.py \
+    ELOVL2_6=data/processed/chr6/11044843-11044997_validation.csv \
+    C1orf132=data/processed/chr1/207996978-207997090_validation.csv \
+    -o data/processed/combined/ELOVL2_6_C1orf132_validation.csv
+
+  python3 scripts/concat_markers.py \
+    ELOVL2_6=data/processed/chr6/11044843-11044997_test.csv \
+    C1orf132=data/processed/chr1/207996978-207997090_test.csv \
+    -o data/processed/combined/ELOVL2_6_C1orf132_test.csv
+
+Each marker's pattern columns are prefixed with the marker name to avoid collisions.
+A _manifest.json file is written alongside each CSV so augmentation runs independently
+per marker and the results are combined in the correct format.
+Only samples present in all markers are kept (inner join on tag).
+
+Then train:
+
+  python3 train.py \
+    -dp  data/processed/combined/ELOVL2_6_C1orf132_train.csv \
+    -dpt data/processed/combined/ELOVL2_6_C1orf132_test.csv \
+    -dpv data/processed/combined/ELOVL2_6_C1orf132_validation.csv \
+    -m   ELOVL2_6_C1orf132
+
+The model input size and layer size are derived automatically from the manifest —
+no extra flags are needed.
+
+
+────────────────────────────────────────
+STEP 4 — Predict
+────────────────────────────────────────
+
+  python3 predict.py \
+    -m  ELOVL2_6 \
+    -dp data/processed/chr6/11044843-11044997_test.csv
+
+To save predictions to a CSV file:
+
+  python3 predict.py \
+    -m  ELOVL2_6 \
+    -dp data/processed/chr6/11044843-11044997_test.csv \
+    -s  True \
+    -o  results/
+
+
+────────────────────────────────────────
+QUICK TEST with example data
+────────────────────────────────────────
+
+To verify the setup without preparing real data, run against the bundled examples:
+
+  python3 train.py \
+    -dp  example/elovl_example_train.csv \
+    -dpt example/elovl_example_test.csv \
+    -dpv example/elovl_example_validation.csv \
+    -m   ELOVL2_6
+
+  python3 predict.py \
+    -m  ELOVL2_6 \
+    -dp example/elovl_example_test.csv

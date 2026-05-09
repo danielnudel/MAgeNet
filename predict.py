@@ -8,6 +8,8 @@ import torch.nn.functional as F
 
 import argparse
 
+from augment_utils import augment as _augment_base
+
 
 #network parameters: (input size, layer size, number of layers)
 MODEL_PARAMETERS = {
@@ -73,7 +75,7 @@ def predict(args, df):
 
         predictions_by_tag = dict()     # here all 128 subsamples are collected, by tag, to average them later
         for l in range(len(out_test)):
-            tag = tags[l].item()
+            tag = tags[l]
             original_tag = tag
             if original_tag in predictions_by_tag:
                 predictions_by_tag[original_tag].append(out_test[l].item())
@@ -101,44 +103,7 @@ def predict(args, df):
 
 
 def augment(data_path):
-    READS_PER_AUGMENTED_SAMPLE = 8192
-    NUM_SUB_SAMPLES = 128
-    data = pd.read_csv(data_path)
-    ages = []
-    original_total_reads = []
-    tags = []
-    boot_rows = np.zeros((len(data.index) * NUM_SUB_SAMPLES, len(data.columns) - 3))
-    row_counter = 0
-    for i, row in data.iterrows():
-        age = row['age']
-        total_reads = row['total_reads_origin']
-        tag = row['tag']
-        probabilities = row.values[:-3] / total_reads
-        for i in range(NUM_SUB_SAMPLES):
-            out = np.random.multinomial(READS_PER_AUGMENTED_SAMPLE, probabilities)
-            boot_rows[row_counter, :] = out
-            ages.append(age)
-            original_total_reads.append(total_reads)
-            tags.append(tag)
-            row_counter += 1
-    df = pd.DataFrame(boot_rows, columns=data.columns[:-3])
-    fixed_columns = df.columns
-    df['age'] = ages
-    df['total_reads_origin'] = original_total_reads
-    df['tag'] = tags
-
-    num_sites = len(data.columns[0])
-    for i in range(num_sites + 1):
-        columns_of_interest = [c for c in fixed_columns if c.count('C') == i]
-        df["C_count_" + str(i)] = df[columns_of_interest].sum(axis=1)
-    for site in range(num_sites):
-        columns_of_interest = [c for c in fixed_columns if c[site] == 'C']
-        df["site_" + str(site + 1)] = df[columns_of_interest].sum(axis=1)
-    columns_order = [c for c in df.columns if "site_" in c] + \
-                    [c for c in df.columns if "C_count_" in c] + \
-                    sorted(list(data.columns[:-3]))
-    df = df[columns_order + ['tag']]
-    return df
+    return _augment_base(data_path, include_age=False)
 
 
 if __name__ == "__main__":
